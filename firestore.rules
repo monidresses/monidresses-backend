@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'superadmin'];
+    }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Public B2C catalog/content. Admin controls writes.
+    match /products/{productId} {
+      allow read: if resource.data.active == true || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+    match /categories/{categoryId} {
+      allow read: if resource.data.active == true || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+    match /siteConfig/public {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Customer profiles. Admin can manage; customers can manage only themselves.
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Customers can create/read their own orders. Admin controls order lifecycle.
+    match /orders/{orderId} {
+      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow update: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid
+        && request.resource.data.customerId == resource.data.customerId);
+      allow delete: if isAdmin();
+    }
+
+    // Everything else is private until explicitly modeled.
+    match /{document=**} { allow read, write: if isAdmin(); }
+  }
+}
